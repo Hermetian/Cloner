@@ -1,0 +1,83 @@
+# Cloner Project Configuration
+
+# Meeting Capture Settings
+capture:
+  # Browser settings for headless capture
+  browser: "chromium"  # chromium, firefox, or webkit
+  headless: true
+  video_quality: "high"  # low, medium, high
+  audio_quality: 48000  # Sample rate in Hz
+
+  # Recording paths
+  output_dir: "data/video"
+  audio_dir: "data/audio"
+
+# Voice Cloning Settings
+voice:
+  # Voice cloning service
+  provider: "elevenlabs"  # elevenlabs, resemble, or local
+
+  # ElevenLabs API settings
+  elevenlabs:
+    api_key: "${ELEVENLABS_API_KEY}"  # Set via environment variable
+    model: "eleven_monolingual_v1"
+    voice_settings:
+      stability: 0.5
+      similarity_boost: 0.75
+
+  # Minimum audio duration for training (seconds)
+  min_audio_duration: 60
+
+  # Output settings
+  output_format: "mp3"
+  output_dir: "data/audio"
+
+# Video Generation (Deepfake) Settings
+video:
+  # Deepfake tool
+  tool: "deepfacelive"  # deepfacelive, facefusion, or deeplablab
+
+  # Model settings
+  model_dir: "data/models"
+
+  # Quality settings
+  resolution: "1080p"  # 720p, 1080p, 4k
+  fps: 30
+
+  # Face detection
+  face_detector: "mediapipe"  # mediapipe, insightface, or opencv
+
+  # Output settings
+  output_dir: "data/video"
+
+# Video Compositing Settings
+compositing:
+  # Green screen settings
+  chroma_key_color: "00ff00"  # Hex color code
+  chroma_similarity: 0.4
+  chroma_blend: 0.2
+
+  # Animation settings
+  animation:
+    door_enter_duration: 2.0  # seconds
+    door_exit_duration: 2.0    # seconds
+    walk_duration: 1.5         # seconds
+    sitting_duration: 0.5      # seconds
+
+  # Output settings
+  output_dir: "data/output"
+  output_format: "mp4"
+  codec: "libx264"
+  bitrate: "5000k"
+
+# Script Settings
+script:
+  # Default message templates
+  templates_dir: "config/templates"
+  default_template: "greeting"
+
+# Logging Settings
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "cloner.log"
+  console: true
