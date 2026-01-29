@@ -16,9 +16,19 @@ import cv2
 
 try:
     import mediapipe as mp
-    HAS_MEDIAPIPE = True
+    # Check for legacy vs new API
+    if hasattr(mp, 'solutions'):
+        HAS_MEDIAPIPE = True
+        MEDIAPIPE_LEGACY = True
+    elif hasattr(mp, 'tasks'):
+        HAS_MEDIAPIPE = True
+        MEDIAPIPE_LEGACY = False
+    else:
+        HAS_MEDIAPIPE = False
+        MEDIAPIPE_LEGACY = False
 except ImportError:
     HAS_MEDIAPIPE = False
+    MEDIAPIPE_LEGACY = False
     print("Warning: mediapipe not installed. Face detection will be limited.")
 
 from .phoneme_mapper import VISEME_MAP, VISEME_DESCRIPTIONS
@@ -201,9 +211,9 @@ class VisemeLibrary:
             cv2.imwrite(str(self.library_path / "neutral.png"), self.neutral_frame)
             metadata["neutral_frame"] = "neutral.png"
 
-        # Save face bbox
+        # Save face bbox (convert numpy ints to Python ints)
         if self.face_bbox:
-            metadata["face_bbox"] = list(self.face_bbox)
+            metadata["face_bbox"] = [int(x) for x in self.face_bbox]
 
         with open(self.library_path / "metadata.json", 'w') as f:
             json.dump(metadata, f, indent=2)
@@ -278,14 +288,24 @@ class VisemeLibraryBuilder:
     def __init__(self):
         """Initialize the builder."""
         self.face_mesh = None
-        if HAS_MEDIAPIPE:
-            self.face_mesh = mp.solutions.face_mesh.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
+        self.use_mediapipe = False
+
+        if HAS_MEDIAPIPE and MEDIAPIPE_LEGACY:
+            try:
+                self.face_mesh = mp.solutions.face_mesh.FaceMesh(
+                    static_image_mode=False,
+                    max_num_faces=1,
+                    refine_landmarks=True,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+                self.use_mediapipe = True
+            except Exception as e:
+                logger.warning(f"Could not initialize MediaPipe FaceMesh: {e}")
+        elif HAS_MEDIAPIPE and not MEDIAPIPE_LEGACY:
+            # New MediaPipe API - use OpenCV fallback for now
+            logger.info("Using OpenCV face detection (MediaPipe tasks API not yet supported)")
+            self.use_mediapipe = False
 
     def extract_mouth_from_frame(
         self,
@@ -302,7 +322,7 @@ class VisemeLibraryBuilder:
         Returns:
             MouthRegion or None if no face detected
         """
-        if not HAS_MEDIAPIPE or self.face_mesh is None:
+        if not self.use_mediapipe or self.face_mesh is None:
             return self._extract_mouth_opencv(frame, padding)
 
         # Convert to RGB for MediaPipe
@@ -524,7 +544,7 @@ class VisemeLibraryBuilder:
 
     def _get_face_bbox(self, frame: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         """Get face bounding box from frame."""
-        if HAS_MEDIAPIPE and self.face_mesh:
+        if self.use_mediapipe and self.face_mesh:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = self.face_mesh.process(rgb)
 
