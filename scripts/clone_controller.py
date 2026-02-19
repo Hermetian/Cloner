@@ -774,6 +774,9 @@ class CloneController:
         # Clone agent (AI brain + TTS)
         self.agent = CloneAgent(on_status_callback=self.on_agent_status)
 
+        # Person descriptor (text-based appearance for Sora prompts)
+        self.person_descriptor = None
+
         # Scan tracking
         self.audio_duration = 0
         self.scan_start_time = None
@@ -1079,6 +1082,18 @@ class CloneController:
                 f.write(base64.b64decode(img_data))
 
             self.log(f"Room saved: {self.room_image}")
+
+            # Validate room is empty (no person visible)
+            from src.video.person_descriptor import validate_empty_room
+            is_empty, reason = validate_empty_room(self.room_image, GOOGLE_API_KEY)
+            if not is_empty:
+                self.log(f"Room validation FAILED: {reason}")
+                self.voice_label.config(text=reason, fg="red")
+                self.help_label.config(text="Say 'room' to retake", fg="orange")
+                self.room_image = None
+                self.update_state("wait_pic")
+                return
+
             self.voice_label.config(text="Room captured!", fg="green")
 
             # If both room and door are captured, move to phase 2
@@ -1123,6 +1138,18 @@ class CloneController:
                 f.write(base64.b64decode(img_data))
 
             self.log(f"Door saved: {self.door_image}")
+
+            # Validate door frame is empty (no person visible)
+            from src.video.person_descriptor import validate_empty_room
+            is_empty, reason = validate_empty_room(self.door_image, GOOGLE_API_KEY)
+            if not is_empty:
+                self.log(f"Door validation FAILED: {reason}")
+                self.voice_label.config(text=reason, fg="red")
+                self.help_label.config(text="Say 'door' to retake", fg="orange")
+                self.door_image = None
+                self.update_state("wait_pic")
+                return
+
             self.voice_label.config(text="Door captured!", fg="green")
 
             # If both room and door are captured, move to phase 2
@@ -1176,6 +1203,16 @@ class CloneController:
             self.voice_audio_path = cached_voice
             self.log(f"Using cached voice: {cached_voice}")
 
+        # Load cached person descriptor if available
+        cached_desc = os.path.join(VIDEO_DIR, "person_descriptor.json")
+        if os.path.exists(cached_desc):
+            from src.video.person_descriptor import PersonDescriptor
+            try:
+                self.person_descriptor = PersonDescriptor.load(cached_desc)
+                self.log(f"Using cached person descriptor (valid={self.person_descriptor.is_valid()})")
+            except Exception as e:
+                self.log(f"Failed to load cached descriptor: {e}")
+
         self.voice_label.config(text="Using cached scan data", fg="green")
 
         # Go straight to video generation
@@ -1203,6 +1240,17 @@ class CloneController:
             return
 
         self.log("All cached videos found!")
+
+        # Load cached person descriptor if available
+        cached_desc = os.path.join(VIDEO_DIR, "person_descriptor.json")
+        if os.path.exists(cached_desc):
+            from src.video.person_descriptor import PersonDescriptor
+            try:
+                self.person_descriptor = PersonDescriptor.load(cached_desc)
+                self.log(f"Using cached person descriptor (valid={self.person_descriptor.is_valid()})")
+            except Exception as e:
+                self.log(f"Failed to load cached descriptor: {e}")
+
         self.voice_label.config(text="Using cached videos", fg="green")
 
         # Setup OBS with cached videos
@@ -1311,6 +1359,18 @@ class CloneController:
             # Select best face with Gemini
             self.voice_label.config(text="Selecting best face...", fg="#4169E1")
             self._select_best_face()
+
+            # Extract person descriptor from face captures
+            self.voice_label.config(text="Analyzing appearance...", fg="#4169E1")
+            self.root.update()
+            from src.video.person_descriptor import extract_person_descriptor
+            self.person_descriptor = extract_person_descriptor(self.face_images, GOOGLE_API_KEY)
+            if self.person_descriptor:
+                desc_path = os.path.join(VIDEO_DIR, "person_descriptor.json")
+                self.person_descriptor.save(desc_path)
+                self.log(f"Person descriptor saved: {desc_path}")
+            else:
+                self.log("Person descriptor extraction failed, will use hardcoded prompts")
 
             # Continue to video generation
             self.do_generate_videos()
@@ -1421,6 +1481,11 @@ class CloneController:
             room_data = f.read()
         room_part = types.Part.from_bytes(data=room_data, mime_type="image/png")
 
+        # Use descriptor clothing if available, else fallback
+        clothing_desc = "casual clothes (olive green t-shirt)"
+        if self.person_descriptor and self.person_descriptor.clothing_upper:
+            clothing_desc = self.person_descriptor.clothing_upper
+
         response = client.models.generate_content(
             model="gemini-2.0-flash-exp",
             contents=[
@@ -1428,11 +1493,11 @@ class CloneController:
                 face_part,
                 "ROOM TO EDIT:",
                 room_part,
-                """Edit the ROOM image to add the person from the first image.
+                f"""Edit the ROOM image to add the person from the first image.
                 The person should be FULLY SEATED in the smaller wooden chair on the LEFT side.
                 They should be facing the camera, looking natural and relaxed.
                 Keep the room exactly as shown, only add the seated person.
-                The person should wear casual clothes (olive green t-shirt)."""
+                The person should wear {clothing_desc}."""
             ],
             config=types.GenerateContentConfig(
                 response_modalities=['IMAGE', 'TEXT'],
@@ -1456,21 +1521,31 @@ class CloneController:
         seated_frame = os.path.join(VIDEO_DIR, "clone_seated.png")
         empty_room = self.room_image
 
+        # Use person descriptor for prompts if available
+        if self.person_descriptor and self.person_descriptor.is_valid():
+            from src.video.person_descriptor import build_video_prompt
+            prompt = build_video_prompt(video_type, self.person_descriptor)
+            self.log(f"Using descriptor prompt: {prompt[:80]}...")
+        else:
+            # Fallback to hardcoded prompts
+            if video_type == "entry":
+                prompt = "The door opens. A person enters through the door, walks across the room, and sits down in the chair on the left. The door closes. Smooth natural movement."
+            elif video_type == "idle":
+                prompt = "Person seated in chair, breathing naturally. Subtle mouth movement as if about to speak. Blinks occasionally. Very subtle idle motion for seamless loop."
+            elif video_type == "exit":
+                prompt = "Person stands up from chair, walks around behind the large chair, approaches the door, opens it and exits. The door closes leaving the room empty. Smooth natural walking."
+            else:
+                raise ValueError(f"Unknown video type: {video_type}")
+
         if video_type == "entry":
             image_path = empty_room
-            prompt = "The door opens. A person enters through the door, walks across the room, and sits down in the chair on the left. The door closes. Smooth natural movement."
             output = os.path.join(VIDEO_DIR, "entry.mp4")
-
         elif video_type == "idle":
             image_path = seated_frame
-            prompt = "Person seated in chair, breathing naturally. Subtle mouth movement as if about to speak. Blinks occasionally. Very subtle idle motion for seamless loop."
             output = os.path.join(VIDEO_DIR, "idle_loop.mp4")
-
         elif video_type == "exit":
             image_path = seated_frame
-            prompt = "Person stands up from chair, walks around behind the large chair, approaches the door, opens it and exits. The door closes leaving the room empty. Smooth natural walking."
             output = os.path.join(VIDEO_DIR, "exit.mp4")
-
         else:
             raise ValueError(f"Unknown video type: {video_type}")
 
