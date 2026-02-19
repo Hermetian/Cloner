@@ -25,14 +25,21 @@ import atexit
 import queue
 
 # Add parent dir to path for imports
-sys.path.insert(0, r"C:\Users\cordw")
+if sys.platform == "win32":
+    sys.path.insert(0, r"C:\Users\cordw")
+else:
+    sys.path.insert(0, os.path.expanduser("~/Projects/Cloner"))
 
-# Configuration
-VIDEO_DIR = r"C:\Users\cordw\clone_videos"
+# Configuration - cross-platform paths
+if sys.platform == "win32":
+    VIDEO_DIR = r"C:\Users\cordw\clone_videos"
+    LOCK_FILE = r"C:\Users\cordw\clone_controller.lock"
+else:
+    VIDEO_DIR = os.path.expanduser("~/Projects/Cloner/data/video")
+    LOCK_FILE = os.path.expanduser("~/.cloner/clone_controller.lock")
 OBS_HOST = "localhost"
 OBS_PORT = 4455
 OBS_PASSWORD = "slopifywins"
-LOCK_FILE = r"C:\Users\cordw\clone_controller.lock"
 
 
 def check_single_instance():
@@ -43,8 +50,12 @@ def check_single_instance():
                 old_pid = int(f.read().strip())
             # Try to kill the old process
             import subprocess
-            subprocess.run(['taskkill', '/F', '/PID', str(old_pid)],
-                         capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            import signal
+            if sys.platform == "win32":
+                subprocess.run(['taskkill', '/F', '/PID', str(old_pid)],
+                             capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                os.kill(old_pid, signal.SIGTERM)
             print(f"[INIT] Killed previous instance (PID {old_pid})")
             time.sleep(0.5)  # Give it time to die
         except:
@@ -75,12 +86,14 @@ CABLE_DEVICE = 23  # VB-Cable for capturing other person's voice
 
 # API Keys
 from dotenv import load_dotenv
-load_dotenv(r"C:\Users\cordw\iCloudDrive\Documents\Projects\ClaudeCommander\master.env")
-# FAL uses FAL_KEY env var, but master.env has FAL_API_KEY
+if sys.platform == "win32":
+    load_dotenv(r"C:\Users\cordw\iCloudDrive\Documents\Projects\ClaudeCommander\master.env")
+else:
+    # Try project .env first, then fall back
+    _env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    load_dotenv(os.path.abspath(_env_path))
+# FAL key still loaded for potential fallback, but Sora is primary video backend
 FAL_KEY = os.environ.get("FAL_KEY") or os.environ.get("FAL_API_KEY", "")
-# Set FAL_KEY in environment now so fal_client can find it
-if FAL_KEY:
-    os.environ["FAL_KEY"] = FAL_KEY
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
@@ -1060,7 +1073,7 @@ class CloneController:
             )
 
             img_data = result.image_data.split(",")[1]
-            self.room_image = f"{VIDEO_DIR}\\room_capture.png"
+            self.room_image = os.path.join(VIDEO_DIR, "room_capture.png")
 
             with open(self.room_image, "wb") as f:
                 f.write(base64.b64decode(img_data))
@@ -1104,7 +1117,7 @@ class CloneController:
             )
 
             img_data = result.image_data.split(",")[1]
-            self.door_image = f"{VIDEO_DIR}\\door_capture.png"
+            self.door_image = os.path.join(VIDEO_DIR, "door_capture.png")
 
             with open(self.door_image, "wb") as f:
                 f.write(base64.b64decode(img_data))
@@ -1129,8 +1142,8 @@ class CloneController:
         self.log("Skipping picture capture, using cached images...")
 
         # Check for cached images
-        cached_room = f"{VIDEO_DIR}\\room_capture.png"
-        cached_door = f"{VIDEO_DIR}\\door_capture.png"
+        cached_room = os.path.join(VIDEO_DIR, "room_capture.png")
+        cached_door = os.path.join(VIDEO_DIR, "door_capture.png")
 
         if os.path.exists(cached_room):
             self.room_image = cached_room
@@ -1150,8 +1163,8 @@ class CloneController:
         """Skip face/voice scan, use cached data and go straight to video generation."""
         self.log("Skipping scan, using cached face reference...")
 
-        cached_face = f"{VIDEO_DIR}\\face_reference.png"
-        cached_voice = f"{VIDEO_DIR}\\voice_sample.wav"
+        cached_face = os.path.join(VIDEO_DIR, "face_reference.png")
+        cached_voice = os.path.join(VIDEO_DIR, "voice_sample.wav")
 
         if os.path.exists(cached_face):
             self.log(f"Using cached face: {cached_face}")
@@ -1173,9 +1186,9 @@ class CloneController:
         self.log("Skipping all - using cached videos...")
 
         # Check for cached videos
-        entry_vid = f"{VIDEO_DIR}\\entry.mp4"
-        idle_vid = f"{VIDEO_DIR}\\idle_loop.mp4"
-        exit_vid = f"{VIDEO_DIR}\\exit.mp4"
+        entry_vid = os.path.join(VIDEO_DIR, "entry.mp4")
+        idle_vid = os.path.join(VIDEO_DIR, "idle_loop.mp4")
+        exit_vid = os.path.join(VIDEO_DIR, "exit.mp4")
 
         missing = []
         if not os.path.exists(entry_vid):
@@ -1268,7 +1281,7 @@ class CloneController:
                 # Take screenshot every interval
                 if elapsed - last_screenshot >= screenshot_interval:
                     screenshot = pyautogui.screenshot()
-                    path = f"{VIDEO_DIR}\\face_capture_{len(self.face_images)}.png"
+                    path = os.path.join(VIDEO_DIR, f"face_capture_{len(self.face_images)}.png")
                     screenshot.save(path)
                     self.face_images.append(path)
                     last_screenshot = elapsed
@@ -1285,7 +1298,7 @@ class CloneController:
             audio_stream.close()
             audio.terminate()
 
-            self.voice_audio_path = f"{VIDEO_DIR}\\voice_sample.wav"
+            self.voice_audio_path = os.path.join(VIDEO_DIR, "voice_sample.wav")
             with wave.open(self.voice_audio_path, 'wb') as wf:
                 wf.setnchannels(channels)
                 wf.setsampwidth(2)
@@ -1342,7 +1355,7 @@ class CloneController:
         best_idx = max(0, min(len(self.face_images)-1, best_idx))
 
         best_path = self.face_images[best_idx]
-        ref_path = f"{VIDEO_DIR}\\face_reference.png"
+        ref_path = os.path.join(VIDEO_DIR, "face_reference.png")
         shutil.copy(best_path, ref_path)
         self.log(f"Face reference saved: {ref_path}")
 
@@ -1399,7 +1412,7 @@ class CloneController:
 
         client = genai.Client(api_key=GOOGLE_API_KEY)
 
-        face_path = f"{VIDEO_DIR}\\face_reference.png"
+        face_path = os.path.join(VIDEO_DIR, "face_reference.png")
         with open(face_path, "rb") as f:
             face_data = f.read()
         face_part = types.Part.from_bytes(data=face_data, mime_type="image/png")
@@ -1428,7 +1441,7 @@ class CloneController:
 
         for part in response.candidates[0].content.parts:
             if hasattr(part, 'inline_data') and part.inline_data:
-                output_path = f"{VIDEO_DIR}\\clone_seated.png"
+                output_path = os.path.join(VIDEO_DIR, "clone_seated.png")
                 with open(output_path, "wb") as f:
                     f.write(part.inline_data.data)
                 self.log(f"Seated image saved: {output_path}")
@@ -1437,60 +1450,38 @@ class CloneController:
         raise Exception("Gemini did not return an image")
 
     def _generate_video(self, video_type, duration):
-        """Generate video using Kling."""
-        import fal_client
-        import requests
+        """Generate video using Sora (browser automation)."""
+        from src.video.sora_client import generate_video_sync
 
-        # FAL_KEY should already be set at module load, but ensure it's there
-        if not os.environ.get("FAL_KEY"):
-            os.environ["FAL_KEY"] = FAL_KEY
-
-        def image_to_data_url(path):
-            with open(path, "rb") as f:
-                data = base64.b64encode(f.read()).decode()
-            return f"data:image/png;base64,{data}"
-
-        seated_frame = f"{VIDEO_DIR}\\clone_seated.png"
+        seated_frame = os.path.join(VIDEO_DIR, "clone_seated.png")
         empty_room = self.room_image
 
         if video_type == "entry":
-            start_url = image_to_data_url(empty_room)
-            end_url = image_to_data_url(seated_frame)
+            image_path = empty_room
             prompt = "The door opens. A person enters through the door, walks across the room, and sits down in the chair on the left. The door closes. Smooth natural movement."
-            output = f"{VIDEO_DIR}\\entry.mp4"
+            output = os.path.join(VIDEO_DIR, "entry.mp4")
 
         elif video_type == "idle":
-            start_url = image_to_data_url(seated_frame)
-            end_url = start_url
+            image_path = seated_frame
             prompt = "Person seated in chair, breathing naturally. Subtle mouth movement as if about to speak. Blinks occasionally. Very subtle idle motion for seamless loop."
-            output = f"{VIDEO_DIR}\\idle_loop.mp4"
+            output = os.path.join(VIDEO_DIR, "idle_loop.mp4")
 
         elif video_type == "exit":
-            start_url = image_to_data_url(seated_frame)
-            end_url = image_to_data_url(empty_room)
+            image_path = seated_frame
             prompt = "Person stands up from chair, walks around behind the large chair, approaches the door, opens it and exits. The door closes leaving the room empty. Smooth natural walking."
-            output = f"{VIDEO_DIR}\\exit.mp4"
+            output = os.path.join(VIDEO_DIR, "exit.mp4")
 
         else:
             raise ValueError(f"Unknown video type: {video_type}")
 
-        self.log(f"Submitting {video_type} to Kling ({duration}s)...")
-        result = fal_client.subscribe(
-            "fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
-            arguments={
-                "prompt": prompt,
-                "image_url": start_url,
-                "tail_image_url": end_url,
-                "duration": str(duration),
-                "aspect_ratio": "16:9",
-            },
+        self.log(f"Submitting {video_type} to Sora ({duration}s)...")
+        generate_video_sync(
+            image_path=image_path,
+            prompt=prompt,
+            output_path=output,
+            duration=duration,
+            orientation="landscape",
         )
-
-        video_url = result['video']['url']
-        self.log(f"Downloading {video_type}...")
-        resp = requests.get(video_url)
-        with open(output, "wb") as f:
-            f.write(resp.content)
         self.log(f"Saved: {output}")
 
     def _setup_obs_scenes(self):
@@ -1507,9 +1498,9 @@ class CloneController:
                 cl.create_scene(scene)
 
         videos = {
-            "Entry": ("EntryVideo", f"{VIDEO_DIR}\\entry.mp4", False),
-            "IdleLoop": ("IdleVideo", f"{VIDEO_DIR}\\idle_loop.mp4", True),
-            "Exit": ("ExitVideo", f"{VIDEO_DIR}\\exit.mp4", False),
+            "Entry": ("EntryVideo", os.path.join(VIDEO_DIR, "entry.mp4"), False),
+            "IdleLoop": ("IdleVideo", os.path.join(VIDEO_DIR, "idle_loop.mp4"), True),
+            "Exit": ("ExitVideo", os.path.join(VIDEO_DIR, "exit.mp4"), False),
         }
 
         for scene, (input_name, path, looping) in videos.items():
