@@ -40,6 +40,20 @@ class ConfigLoader:
 
         # Replace environment variable placeholders
         self._replace_env_vars(self.config)
+        # Expand ~ in path values
+        self._expand_paths(self.config)
+
+    def _expand_paths(self, config: Dict[str, Any]):
+        """
+        Recursively expand ~ to home directory in string values under 'paths' section.
+
+        Also expands any top-level keys whose values contain ~.
+        """
+        for key, value in config.items():
+            if isinstance(value, dict):
+                self._expand_paths(value)
+            elif isinstance(value, str) and "~" in value:
+                config[key] = str(Path(value).expanduser())
 
     def _replace_env_vars(self, config: Dict[str, Any]):
         """

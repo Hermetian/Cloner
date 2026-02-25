@@ -29,7 +29,12 @@ from openai import OpenAI
 
 # Load environment
 from dotenv import load_dotenv
-load_dotenv(Path(r"C:\Users\cordw\iCloudDrive\Documents\Projects\Cloner\.env"))
+# Load from master.env (cross-platform), then fall back to project .env
+_master_env = Path.home() / "iCloudDrive" / "Documents" / "Projects" / "ClaudeCommander" / "master.env"
+if _master_env.exists():
+    load_dotenv(_master_env)
+else:
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -47,7 +52,7 @@ SILENCE_AFTER_SPEECH = 1.5   # Seconds of silence after speech to trigger transc
 MAX_RECORDING_DURATION = 30  # Maximum recording length in seconds
 
 # Directory for audio files
-AUDIO_DIR = Path("/mnt/c/Users/cordw/clone_videos/listener_audio")
+AUDIO_DIR = Path.home() / "clone_videos" / "listener_audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -234,9 +239,9 @@ class CloneListener:
         filepath = AUDIO_DIR / f"speech_{timestamp}.wav"
 
         with wave.open(str(filepath), 'wb') as wf:
-            wf.setnchannels(CHANNELS)
+            wf.setnchannels(self.actual_channels)
             wf.setsampwidth(self.audio.get_sample_size(FORMAT))
-            wf.setframerate(SAMPLE_RATE)
+            wf.setframerate(self.actual_sample_rate)
             wf.writeframes(b''.join(frames))
 
         print(f"  [Saved: {filepath.name}]")
@@ -345,8 +350,8 @@ def main():
     print("CLONE LISTENER - Automatic Speech Detection")
     print("=" * 60)
 
-    # Import the brain
-    sys.path.insert(0, r"C:\Users\cordw")
+    # Import the brain (from same scripts/ directory)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from clone_brain import CloneBrain
 
     brain = CloneBrain(speak=args.speak)

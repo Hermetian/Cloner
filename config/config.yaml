@@ -76,6 +76,40 @@ script:
   templates_dir: "config/templates"
   default_template: "greeting"
 
+# Clone Controller Settings
+audio:
+  mic_device: "USB CAMERA"
+  capture_device: "CABLE Output (VB-Audio Virtual Cable)"
+  preferred_sample_rate: 48000
+
+obs:
+  host: localhost
+  port: 4455
+  password: slopifywins
+
+paths:
+  video_dir: ~/clone_videos
+  lock_file: ~/.cloner/clone_controller.lock
+  env_file: ~/iCloudDrive/Documents/Projects/ClaudeCommander/master.env
+
+brain:
+  model: "gpt-5.1"
+  fallback_model: "gpt-4o"
+  system_prompt_file: config/clone_system_prompt.txt
+  max_history: 20
+
+video_backend:
+  default: sora          # "sora" or "kling"
+  kling:
+    model: "fal-ai/kling-video/v2.5-turbo/pro/image-to-video"
+    fallback_model: "fal-ai/kling-video/o1/image-to-video"
+
+tts:
+  voice_id: nf18MnSL81anCHgQgL1A
+  silence_threshold: 500
+  speech_timeout: 0.8
+  min_speech_duration: 0.5
+
 # Logging Settings
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR

@@ -47,3 +47,12 @@ pyyaml>=6.0.0
 
 # Async Support
 aiohttp>=3.9.0
+
+# FAL API (Kling video backend)
+fal-client>=0.4.0
+
+# OBS WebSocket
+obsws-python>=1.6.0
+
+# Screen Capture
+pyautogui>=0.9.54

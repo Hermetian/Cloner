@@ -25,21 +25,21 @@ import atexit
 import queue
 
 # Add parent dir to path for imports
-if sys.platform == "win32":
-    sys.path.insert(0, r"C:\Users\cordw")
-else:
-    sys.path.insert(0, os.path.expanduser("~/Projects/Cloner"))
+from pathlib import Path
+_project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_project_root))
 
-# Configuration - cross-platform paths
-if sys.platform == "win32":
-    VIDEO_DIR = r"C:\Users\cordw\clone_videos"
-    LOCK_FILE = r"C:\Users\cordw\clone_controller.lock"
-else:
-    VIDEO_DIR = os.path.expanduser("~/Projects/Cloner/data/video")
-    LOCK_FILE = os.path.expanduser("~/.cloner/clone_controller.lock")
-OBS_HOST = "localhost"
-OBS_PORT = 4455
-OBS_PASSWORD = "slopifywins"
+# Configuration - loaded from config/config.yaml via ConfigLoader
+from src.utils.config_loader import ConfigLoader
+_config_path = _project_root / "config" / "config.yaml"
+CONFIG = ConfigLoader(str(_config_path))
+
+# Cross-platform paths from config
+VIDEO_DIR = CONFIG.get("paths", "video_dir", default=str(Path.home() / "clone_videos"))
+LOCK_FILE = CONFIG.get("paths", "lock_file", default=str(Path.home() / ".cloner" / "clone_controller.lock"))
+OBS_HOST = CONFIG.get("obs", "host", default="localhost")
+OBS_PORT = CONFIG.get("obs", "port", default=4455)
+OBS_PASSWORD = CONFIG.get("obs", "password", default="slopifywins")
 
 
 def check_single_instance():
@@ -66,6 +66,7 @@ def check_single_instance():
             pass
 
     # Write our PID
+    os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
     with open(LOCK_FILE, 'w') as f:
         f.write(str(os.getpid()))
 
@@ -80,20 +81,77 @@ def cleanup_lock():
     except:
         pass
 
-# Audio config
-MIC_DEVICE = None  # Default mic for commands
-CABLE_DEVICE = 23  # VB-Cable for capturing other person's voice
+# Audio device name resolution
+def find_audio_device_by_name(name_pattern, input_only=True):
+    """Find audio device index by name (partial match).
 
-# API Keys
+    Returns (index, full_name, info) or (None, None, None).
+    """
+    import pyaudio
+    p = pyaudio.PyAudio()
+    try:
+        for i in range(p.get_device_count()):
+            info = p.get_device_info_by_index(i)
+            if name_pattern.lower() in info['name'].lower():
+                if input_only and info['maxInputChannels'] == 0:
+                    continue
+                return i, info['name'], info
+    finally:
+        p.terminate()
+    return None, None, None
+
+
+# Audio config from config.yaml
+_audio_config = CONFIG.get_section("audio")
+MIC_DEVICE_NAME = _audio_config.get("mic_device", "USB CAMERA")
+CAPTURE_DEVICE_NAME = _audio_config.get("capture_device", "CABLE Output (VB-Audio Virtual Cable)")
+PREFERRED_SAMPLE_RATE = _audio_config.get("preferred_sample_rate", 48000)
+
+# These will be resolved to actual indices at startup
+MIC_DEVICE = None
+CABLE_DEVICE = None
+
+
+def resolve_audio_devices():
+    """Resolve device names to indices. Call at startup."""
+    global MIC_DEVICE, CABLE_DEVICE
+
+    mic_idx, mic_name, _ = find_audio_device_by_name(MIC_DEVICE_NAME)
+    if mic_idx is not None:
+        MIC_DEVICE = mic_idx
+        print(f"[CONFIG] Mic device: [{mic_idx}] {mic_name}")
+    else:
+        print(f"[CONFIG] WARNING: Mic '{MIC_DEVICE_NAME}' not found, using default")
+
+    cap_idx, cap_name, _ = find_audio_device_by_name(CAPTURE_DEVICE_NAME)
+    if cap_idx is not None:
+        CABLE_DEVICE = cap_idx
+        print(f"[CONFIG] Capture device: [{cap_idx}] {cap_name}")
+    else:
+        print(f"[CONFIG] ERROR: Capture device '{CAPTURE_DEVICE_NAME}' not found!")
+        print("[CONFIG] Available input devices:")
+        import pyaudio
+        p = pyaudio.PyAudio()
+        for i in range(p.get_device_count()):
+            info = p.get_device_info_by_index(i)
+            if info['maxInputChannels'] > 0:
+                print(f"  [{i}] {info['name']}")
+        p.terminate()
+
+
+# API Keys - load from config-specified env file, then fallback to project .env
 from dotenv import load_dotenv
-if sys.platform == "win32":
-    load_dotenv(r"C:\Users\cordw\iCloudDrive\Documents\Projects\ClaudeCommander\master.env")
+_env_file = CONFIG.get("paths", "env_file", default="")
+if _env_file and Path(_env_file).exists():
+    load_dotenv(Path(_env_file))
 else:
-    # Try project .env first, then fall back
-    _env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-    load_dotenv(os.path.abspath(_env_path))
-# FAL key still loaded for potential fallback, but Sora is primary video backend
+    _env_path = _project_root / ".env"
+    load_dotenv(_env_path)
+
+# FAL key with re-export so fal_client can find it
 FAL_KEY = os.environ.get("FAL_KEY") or os.environ.get("FAL_API_KEY", "")
+if FAL_KEY:
+    os.environ["FAL_KEY"] = FAL_KEY
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
@@ -109,7 +167,7 @@ COLORS = {
 
 # ElevenLabs config
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
-DEFAULT_VOICE_ID = "nf18MnSL81anCHgQgL1A"  # Cordwell's cloned voice
+DEFAULT_VOICE_ID = CONFIG.get("tts", "voice_id", default="nf18MnSL81anCHgQgL1A")
 TTS_AUDIO_DIR = os.path.join(VIDEO_DIR, "tts_audio")
 os.makedirs(TTS_AUDIO_DIR, exist_ok=True)
 
@@ -511,9 +569,12 @@ Slopify is an AI image/video automation platform demonstrating sophisticated eng
                 if chunk:
                     f.write(chunk)
 
-        # Windows path for OBS
-        windows_path = filepath.replace("/mnt/c/", "C:\\").replace("/", "\\")
-        self._log(f"Audio saved: {windows_path}")
+        # Convert path for OBS (WSL needs Windows paths, macOS/Linux use native paths)
+        if sys.platform == "win32" or "/mnt/c/" in filepath:
+            obs_path = filepath.replace("/mnt/c/", "C:\\").replace("/", "\\")
+        else:
+            obs_path = filepath
+        self._log(f"Audio saved: {obs_path}")
 
         # Play through OBS
         try:
@@ -525,7 +586,7 @@ Slopify is an AI image/video automation platform demonstrating sophisticated eng
             source_exists = "CloneTTS" in input_names
 
             if source_exists:
-                cl.set_input_settings("CloneTTS", {"local_file": windows_path}, True)
+                cl.set_input_settings("CloneTTS", {"local_file": obs_path}, True)
             else:
                 self._log("Creating CloneTTS source...")
                 cl.create_input(
@@ -533,7 +594,7 @@ Slopify is an AI image/video automation platform demonstrating sophisticated eng
                     "CloneTTS",
                     "ffmpeg_source",
                     {
-                        "local_file": windows_path,
+                        "local_file": obs_path,
                         "looping": False,
                         "restart_on_activate": True,
                     },
@@ -954,7 +1015,7 @@ class CloneController:
         """Create the tkinter GUI window."""
         self.root = tk.Tk()
         self.root.title("Clone Controller")
-        self.root.geometry("400x280")
+        self.root.geometry("450x320")
         self.root.resizable(False, False)
         self.root.attributes("-topmost", True)
 
@@ -1022,6 +1083,36 @@ class CloneController:
             fg="gray"
         )
         self.help_label.pack(pady=(5, 0))
+
+        # --- Debug/Test Controls ---
+        self.debug_frame = tk.Frame(self.main_frame)
+        self.debug_frame.pack(fill=tk.X, pady=(10, 0))
+
+        # Skip to Clone button (orange)
+        self.skip_btn = tk.Button(
+            self.debug_frame,
+            text="Skip to Clone",
+            font=("Segoe UI", 9),
+            bg="#FFA500",
+            command=self.skip_to_clone
+        )
+        self.skip_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        # Simulate interviewer text input
+        self.sim_entry = tk.Entry(self.debug_frame, width=25, font=("Segoe UI", 9))
+        self.sim_entry.pack(side=tk.LEFT, padx=(0, 5))
+        self.sim_entry.bind("<Return>", self.simulate_interviewer)
+
+        # Simulate button (purple)
+        self.sim_btn = tk.Button(
+            self.debug_frame,
+            text="Simulate",
+            font=("Segoe UI", 9),
+            bg="#9370DB",
+            fg="white",
+            command=lambda: self.simulate_interviewer(None)
+        )
+        self.sim_btn.pack(side=tk.LEFT)
 
         # Bind keys
         self.root.bind("<Return>", self.on_enter)
@@ -1136,6 +1227,47 @@ class CloneController:
         cleanup_lock()
         self.root.destroy()
         sys.exit(0)
+
+    def skip_to_clone(self):
+        """Skip directly to clone running state with cached videos."""
+        self.log("=== SKIP TO CLONE ===")
+
+        # Make sure we have cached videos
+        required = ["entry.mp4", "idle_loop.mp4", "exit.mp4"]
+        missing = [f for f in required if not os.path.exists(os.path.join(VIDEO_DIR, f))]
+        if missing:
+            self.log(f"ERROR: Missing cached videos: {missing}")
+            self.help_label.config(text=f"Missing: {', '.join(missing)}", fg="red")
+            return
+
+        # Load cached person descriptor if available
+        cached_desc = os.path.join(VIDEO_DIR, "person_descriptor.json")
+        if os.path.exists(cached_desc):
+            from src.video.person_descriptor import PersonDescriptor
+            try:
+                self.person_descriptor = PersonDescriptor.load(cached_desc)
+                self.log(f"Using cached person descriptor (valid={self.person_descriptor.is_valid()})")
+            except Exception as e:
+                self.log(f"Failed to load cached descriptor: {e}")
+
+        # Load cached videos into OBS and start clone
+        self._execute_action("skip_all")
+
+    def simulate_interviewer(self, event=None):
+        """Simulate interviewer speech by injecting text directly to the agent."""
+        text = self.sim_entry.get().strip()
+        if not text:
+            return
+
+        self.sim_entry.delete(0, tk.END)
+
+        if self.state != "running":
+            self.log(f"[SIM] Not in running state (current: {self.state})")
+            self.help_label.config(text="Clone must be running to simulate", fg="orange")
+            return
+
+        self.log(f"[SIM] Simulating interviewer: {text}")
+        self.agent.on_interviewer_speaks(text)
 
     def on_utterance(self, speaker, text):
         """Handle transcribed utterance from conversation (for agent context)."""
@@ -1448,6 +1580,13 @@ class CloneController:
             # Setup audio recording from VB-Cable (other person's voice)
             audio = pyaudio.PyAudio()
 
+            if CABLE_DEVICE is None:
+                self.log("ERROR: No capture device configured. Run with --devices to see available devices.")
+                self.help_label.config(text="No capture device found", fg="red")
+                self.update_state("wait_rec")
+                audio.terminate()
+                return
+
             dev_info = audio.get_device_info_by_index(CABLE_DEVICE)
             sample_rate = int(dev_info['defaultSampleRate'])
             channels = min(2, int(dev_info['maxInputChannels']))
@@ -1681,8 +1820,12 @@ class CloneController:
         raise Exception("Gemini did not return an image")
 
     def _generate_video(self, video_type, duration):
-        """Generate video using Sora (browser automation)."""
-        from src.video.sora_client import generate_video_sync
+        """Generate video using configured backend (Sora or Kling)."""
+        from src.video.video_backend import get_video_backend
+
+        backend_name = CONFIG.get("video_backend", "default", default="sora")
+        backend_config = CONFIG.get_section("video_backend")
+        backend = get_video_backend(backend_name, backend_config)
 
         seated_frame = os.path.join(VIDEO_DIR, "clone_seated.png")
         empty_room = self.room_image
@@ -1715,8 +1858,8 @@ class CloneController:
         else:
             raise ValueError(f"Unknown video type: {video_type}")
 
-        self.log(f"Submitting {video_type} to Sora ({duration}s)...")
-        generate_video_sync(
+        self.log(f"Submitting {video_type} to {backend_name} ({duration}s)...")
+        backend.generate_video(
             image_path=image_path,
             prompt=prompt,
             output_path=output,
@@ -1903,5 +2046,6 @@ class CloneController:
 
 if __name__ == "__main__":
     check_single_instance()
+    resolve_audio_devices()
     controller = CloneController()
     controller.run()
